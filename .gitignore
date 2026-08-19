@@ -44,4 +44,5 @@ yarn-error.*
 backend/db.sqlite3
 backend/**/__pycache__/
 backend/.pytest_cache/
+backend/*.pt
 CLAUDE.md
