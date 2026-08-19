@@ -39,4 +39,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Django
+backend/db.sqlite3
+backend/**/__pycache__/
+backend/.pytest_cache/
 CLAUDE.md
