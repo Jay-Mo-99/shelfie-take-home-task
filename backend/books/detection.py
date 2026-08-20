@@ -13,6 +13,7 @@ IOU_THRESHOLD = 0.5
 _model = None
 
 
+# Reuse one model instance so repeated scans avoid model load overhead.
 def _get_model():
     global _model
     if _model is None:
@@ -20,6 +21,7 @@ def _get_model():
     return _model
 
 
+# IoU gives a model-agnostic way to identify duplicate boxes from dense shelves.
 def _intersection_over_union(first_bbox, second_bbox):
     first_left, first_top, first_right, first_bottom = first_bbox
     second_left, second_top, second_right, second_bottom = second_bbox
@@ -39,6 +41,7 @@ def _intersection_over_union(first_bbox, second_bbox):
     return intersection_area / union_area if union_area else 0.0
 
 
+# Keep precision at the chosen threshold; duplicate boxes should not create extra VLM calls.
 def _deduplicate_detections(detections):
     """Keep the highest-confidence box when book boxes overlap too much."""
     remaining = sorted(
@@ -57,6 +60,7 @@ def _deduplicate_detections(detections):
     return kept
 
 
+# CPU inference keeps the local stage free, reproducible, and runnable without a hosted CV service.
 def detect_books(image_path):
     """Detect COCO book objects in an image using YOLOv8n on the CPU."""
     image_path = Path(image_path)
@@ -78,6 +82,7 @@ def detect_books(image_path):
                 if label != "book":
                     continue
 
+                #
                 coordinates = [round(value, 2) for value in box.xyxy[0].tolist()]
                 detections.append(
                     {
@@ -97,6 +102,7 @@ def detect_books(image_path):
         )
 
 
+# Send one spine at a time so the VLM cannot confuse neighboring books in the full shelf image.
 def crop_book_spines(image_path, detections, output_dir=None):
     """Crop detected book boxes from any image and return the saved crop paths."""
     image_path = Path(image_path)

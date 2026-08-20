@@ -34,6 +34,7 @@ RESPONSE_SCHEMA = {
 }
 
 
+# Return a stable shape so one failed crop does not blank the entire scan result.
 def _safe_result(error=None):
     result = {"title": None, "author": None}
     if error:
@@ -41,6 +42,7 @@ def _safe_result(error=None):
     return result
 
 
+# Keep reading separate from catalog matching so the hosted model cannot invent catalog membership.
 def read_book_spine(image_path):
     """Read visible title and author text from one cropped book-spine image."""
     image_path = Path(image_path)

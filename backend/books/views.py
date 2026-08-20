@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class ScanView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
+    # Persist only high-confidence canonical matches; uncertain results must remain visible for human review.
     def post(self, request):
         uploaded_photo = request.FILES.get("photo")
         if uploaded_photo is None:
@@ -107,6 +108,7 @@ class ScanView(APIView):
             )
 
 
+# Reuse the same serializer for manual review confirmation and normal library additions.
 class BookListCreateView(generics.ListCreateAPIView):
     queryset = Book.objects.all()
     serializer_class = BookSerializer

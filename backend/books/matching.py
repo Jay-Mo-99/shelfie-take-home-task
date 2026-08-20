@@ -14,6 +14,7 @@ AMBIGUITY_MARGIN = 0.05
 MAX_CANDIDATES = 3
 
 
+# Normalize spelling and author formatting before fuzzy comparison to tolerate real catalog noise.
 def _normalize(value):
     normalized = unicodedata.normalize("NFKD", value or "")
     normalized = "".join(
@@ -22,6 +23,7 @@ def _normalize(value):
     return re.sub(r"[^a-z0-9]+", " ", normalized.lower()).strip()
 
 
+# Alternate titles help recover edition and regional-name matches without weakening author evidence.
 def _title_score(input_title, catalog_title, alternate_titles):
     candidates = [catalog_title]
     candidates.extend(
@@ -35,6 +37,7 @@ def _title_score(input_title, catalog_title, alternate_titles):
     )
 
 
+# Title gets more weight because it is usually more distinctive; close different-author matches stay reviewable.
 def match_book(title, author, catalog_path=CATALOG_PATH):
     """
     Find the best matching catalog entry for a book read by the VLM.
