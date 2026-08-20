@@ -11,6 +11,8 @@ interface ReviewItemProps {
 }
 
 export default function ReviewItem({ item, saving, onConfirm, onDiscard }: ReviewItemProps) {
+  // Confirm accepts the app's best guess as-is: the matched catalog entry
+  // when one exists, otherwise whatever the VLM actually read off the spine.
   const suggestedTitle = item.match?.title ?? item.reading.title ?? '';
   const suggestedAuthor = item.match?.author ?? item.reading.author ?? '';
 
@@ -31,9 +33,12 @@ export default function ReviewItem({ item, saving, onConfirm, onDiscard }: Revie
     setIsEditing(true);
   };
 
+  // Correct starts from what was actually read off the spine, not the
+  // catalog's guess — a low-confidence match is often the wrong book
+  // entirely, and pre-filling with it would hide that from the user.
   const handleStartCorrect = () => {
-    setEditTitle(suggestedTitle);
-    setEditAuthor(suggestedAuthor);
+    setEditTitle(item.reading.title ?? '');
+    setEditAuthor(item.reading.author ?? '');
     setEditConfidence(item.confidence);
     setIsEditing(true);
   };
