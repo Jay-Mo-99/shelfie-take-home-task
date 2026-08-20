@@ -25,7 +25,9 @@ SECRET_KEY = "django-insecure-&&an=sbq!(=&#ri$)1s%wx8^ag@h-!d*v$te#5g&9!gv69hv)b
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
+# "*" is required in dev because Expo Go on a physical device reaches this
+# server over the LAN IP printed by `expo start`, not localhost.
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
