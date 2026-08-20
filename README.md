@@ -61,3 +61,93 @@ Matching uses `AUTO_SAVE_THRESHOLD=0.85` and `REVIEW_THRESHOLD=0.5`. Scan
 results are labeled `auto_matched`, `needs_review`, or `unmatched`. Near-tied
 catalog candidates from different authors are returned as `ambiguous` with up
 to three candidates and always require review.
+
+## Setup
+
+From a clean clone:
+
+```powershell
+# Backend
+cd backend
+py -m venv ..\.venv
+..\.venv\Scripts\python.exe -m pip install -r requirements.txt
+..\.venv\Scripts\python.exe manage.py migrate
+..\.venv\Scripts\python.exe manage.py runserver
+```
+
+Set `backend/.env` before using the hosted VLM:
+
+```text
+GEMINI_API_KEY=your-key-here
+```
+
+The Expo app is in a separate directory. In another terminal:
+
+```powershell
+cd frontend
+npm install
+npm start
+```
+
+The backend API is available at `http://127.0.0.1:8000`. The main routes are
+`POST /api/scan/`, `POST /api/books/`, and `GET /api/books/`.
+
+## Architecture
+
+`POST /api/scan/` saves the upload temporarily, runs YOLOv8n on the CPU,
+crops each detected book, sends each crop sequentially to Gemini 3.6 Flash,
+and passes only the returned title/author text to the local RapidFuzz matcher.
+The matcher returns canonical catalog data, confidence, and ambiguity
+candidates. Only `auto_matched` results are persisted to SQLite; review and
+unmatched results remain in the response for a later user decision.
+
+The local model handles location detection because it has no API cost and can
+run offline. The hosted VLM handles reading spine text because that is the
+multimodal task. The VLM is intentionally not given catalog data and is not
+allowed to guess catalog membership.
+
+## Catalog
+
+`catalog.csv` contains 102 entries with `title`, `author`, and
+`alternate_titles`. It deliberately includes duplicate titles with different
+authors, separate editions, US/UK alternate titles, omnibus and individual
+volumes, substring titles, and varied author formatting such as initials and
+`Last, First` order. The catalog is weighted toward commonly owned books so
+that live presentation photos have a reasonable chance of matching.
+
+## Cost Estimate
+
+The local YOLO and RapidFuzz stages cost $0 per request. Gemini 3.6 Flash
+standard paid pricing is $0.75 per 1M input tokens and $3.75 per 1M output
+tokens through December 31, 2026. Using a planning estimate of 560 image input
+tokens plus 50 JSON output tokens per crop gives approximately `$0.00061 per
+crop`, or `$0.00549` for the 9-crop `1.jpg` experiment. Actual cost depends on
+the usage tokens returned by Gemini and should be verified in the billing
+dashboard; this implementation currently logs latency but does not yet expose
+provider token usage in the API response.
+
+## Decisions And Tradeoffs
+
+- YOLOv8n was chosen as an off-the-shelf CPU model within the time budget. It
+  is easy to run locally, but its general COCO training causes missed or
+  merged book spines in dense shelves.
+- Sequential VLM calls were chosen first for simpler error isolation and
+  logging. This makes a 9-crop scan take about 42 seconds in the best recorded
+  run; bounded parallelism would reduce wall-clock latency later.
+- An 8-second local VLM cutoff is used while the provider transport deadline
+  remains 10 seconds because the Gemini API rejects deadlines below 10 seconds.
+- Ambiguous matches are never silently auto-saved. This protects the library
+  from choosing the wrong author when identical titles exist.
+
+## Unfinished
+
+- The Expo app is still the SDK 54 starter screen; camera/gallery upload,
+  result rendering, review controls, and the library list are not connected to
+  the API yet.
+- Review confirmation, correction, and discard are represented by the API
+  contract and `POST /api/books/`, but there is no dedicated review queue UI.
+- The detector is not book-spine-specific, so recall on tightly packed shelves
+  is limited. A labeled spine detector or stronger post-processing would be
+  the next CV improvement.
+- The API does not yet expose Gemini usage tokens or a persisted scan/review
+  record. Temporary crops are deleted after each request by design.

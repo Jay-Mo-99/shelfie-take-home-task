@@ -53,6 +53,15 @@ class ScanView(APIView):
                         scan_status = "needs_review"
                     else:
                         scan_status = "auto_matched"
+                    saved_book_id = None
+                    if scan_status == "auto_matched" and matching.get("matched_book"):
+                        canonical_book = matching["matched_book"]
+                        saved_book = Book.objects.create(
+                            title=canonical_book["title"],
+                            author=canonical_book["author"],
+                            confidence=confidence,
+                        )
+                        saved_book_id = saved_book.id
                     books.append(
                         {
                             "crop": crop_path.name,
@@ -64,6 +73,7 @@ class ScanView(APIView):
                             "title_score": matching.get("title_score", 0.0),
                             "author_score": matching.get("author_score", 0.0),
                             "status": scan_status,
+                            "saved_book_id": saved_book_id,
                         }
                     )
 
