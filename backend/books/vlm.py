@@ -17,8 +17,12 @@ logger = logging.getLogger(__name__)
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 MODEL_NAME = "gemini-3.6-flash"
-VLM_TIMEOUT_SECONDS = 8
+# The local cutoff must stay above the transport deadline below it, not under
+# it — otherwise we abandon responses that were still within the budget we
+# already gave the HTTP client, and every slow-but-successful call gets
+# misreported as a timeout.
 GEMINI_HTTP_TIMEOUT_SECONDS = 10
+VLM_TIMEOUT_SECONDS = 12
 PROMPT = (
     "Read the book title and author exactly as they appear in this image. "
     "Do not match against a catalog or guess. Return null for anything that "

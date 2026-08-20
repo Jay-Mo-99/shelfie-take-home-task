@@ -10,6 +10,11 @@ logger = logging.getLogger(__name__)
 MODEL_PATH = "yolov8n.pt"
 DETECTION_CONFIDENCE = 0.25
 IOU_THRESHOLD = 0.5
+# Full-resolution phone photos make crops far larger than spine text needs.
+# Capping the long edge keeps upload size (and Gemini image tokens) down
+# without hurting OCR legibility.
+CROP_MAX_DIMENSION = 1024
+CROP_JPEG_QUALITY = 85
 _model = None
 
 
@@ -125,7 +130,9 @@ def crop_book_spines(image_path, detections, output_dir=None):
                 continue
 
             crop_path = output_dir / f"{image_path.stem}_book_{index:02d}.jpg"
-            image.crop(box).convert("RGB").save(crop_path, quality=95)
+            crop = image.crop(box).convert("RGB")
+            crop.thumbnail((CROP_MAX_DIMENSION, CROP_MAX_DIMENSION), Image.LANCZOS)
+            crop.save(crop_path, quality=CROP_JPEG_QUALITY)
             crop_paths.append(crop_path)
 
     logger.info("Saved %d book crops for %s", len(crop_paths), image_path)
