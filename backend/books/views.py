@@ -12,7 +12,7 @@ from .models import Book
 from .serializers import BookSerializer
 from .detection import crop_book_spines, detect_books
 from .matching import AUTO_SAVE_THRESHOLD, REVIEW_THRESHOLD, match_book
-from .vlm import read_book_spine
+from .vlm import read_book_spines_batch
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ class ScanView(APIView):
                     image_path, detections, output_dir=Path(temp_dir) / "crops"
                 )
                 books = []
-                for crop_path in crop_paths:
-                    reading = read_book_spine(crop_path)
+                readings = read_book_spines_batch(crop_paths)
+                for crop_path, reading in zip(crop_paths, readings):
                     matching = match_book(reading.get("title"), reading.get("author"))
                     confidence = matching.get("confidence", 0.0)
                     if not reading.get("title") and not reading.get("author"):

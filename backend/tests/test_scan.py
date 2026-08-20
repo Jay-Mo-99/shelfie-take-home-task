@@ -26,9 +26,9 @@ def test_scan_runs_detection_vlm_and_matching_in_order(monkeypatch):
         Image.new("RGB", (20, 40), "white").save(crop_path)
         return [crop_path]
 
-    def fake_read(crop_path):
+    def fake_read_batch(crop_paths):
         calls.append("vlm")
-        return {"title": "1984", "author": "George Orwell"}
+        return [{"title": "1984", "author": "George Orwell"} for _ in crop_paths]
 
     def fake_match(title, author):
         calls.append("match")
@@ -43,7 +43,7 @@ def test_scan_runs_detection_vlm_and_matching_in_order(monkeypatch):
 
     monkeypatch.setattr("books.views.detect_books", fake_detect)
     monkeypatch.setattr("books.views.crop_book_spines", fake_crop)
-    monkeypatch.setattr("books.views.read_book_spine", fake_read)
+    monkeypatch.setattr("books.views.read_book_spines_batch", fake_read_batch)
     monkeypatch.setattr("books.views.match_book", fake_match)
 
     image = BytesIO()
@@ -81,8 +81,8 @@ def test_scan_does_not_save_review_items(monkeypatch):
 
     monkeypatch.setattr("books.views.crop_book_spines", fake_crop)
     monkeypatch.setattr(
-        "books.views.read_book_spine",
-        lambda crop_path: {"title": "The Stranger", "author": None},
+        "books.views.read_book_spines_batch",
+        lambda crop_paths: [{"title": "The Stranger", "author": None}],
     )
     monkeypatch.setattr(
         "books.views.match_book",
