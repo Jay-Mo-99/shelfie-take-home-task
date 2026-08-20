@@ -8,7 +8,7 @@ overlapping book boxes are deduplicated with IoU non-maximum suppression at
 `0.50`; when boxes overlap above that threshold, the higher-confidence box is
 kept.
 
-The test image `backend/test_photos/1.jpg` contains 12 visible books. On
+The test image `backend/test_photos/easy-case1.jpg` contains 12 visible books. On
 the CPU test machine, an YOLOv8n run took `2.626 seconds`, produced 10 raw
 book detections, and returned 9 detections after IoU deduplication at
 confidence `0.25`. Lowering confidence to `0.10` produced
@@ -44,12 +44,16 @@ or a labeled local dataset would be the next step for higher recall.
 
 ## End-to-End Scan Experiment
 
-`POST /api/scan/` now runs the stages sequentially: local YOLO detection,
-Pillow crops, one Gemini VLM request per crop, and catalog matching. On
-`backend/test_photos/1.jpg`, the pipeline produced 9 crops and completed in
-`27.522 seconds` on the test machine. The first 6 VLM calls returned HTTP 200;
-the remaining 3 returned HTTP 429 because the Gemini free tier limit for
-`gemini-3.7-flash` was 5 requests per minute. Those failures were returned as
+`POST /api/scan/` runs local YOLO detection and Pillow crops, then reads all
+crops from one photo through Gemini **concurrently** (bounded to 4 requests
+at a time — see `VLM_MAX_CONCURRENCY` in `vlm.py`), then does catalog
+matching. VLM calls were originally sequential (one request, wait, next
+request); on `backend/test_photos/easy-case1.jpg` (7 crops) that took `100+ seconds`.
+Switching to bounded concurrency dropped the same scan to `19.477 seconds` —
+total latency now tracks roughly the slowest single call instead of the sum
+of every call. Per-crop read reliability is unchanged by this (each call
+still succeeds or fails independently); only the wall-clock time to run a
+full scan improved. Failed or slow individual crops are still returned as
 safe per-book errors instead of aborting the scan.
 
 The endpoint response includes the detected/cropped counts, each crop's VLM
@@ -140,6 +144,24 @@ likelihood:
      cellular data — the phone-to-computer traffic (JS bundle, photo
      upload, book list) stays on the hotspot's local Wi-Fi and costs
      nothing. Good live-demo fallback if the venue's Wi-Fi is uncooperative.
+   - **Last resort — tunnel both Metro and the backend**, if none of the
+     above are possible (no cable, no router access, no hotspot). This only
+     needs the computer to have outbound internet access; it works
+     regardless of any local network restriction. Run two tunnels:
+     ```powershell
+     # Terminal A — tunnel Django (needs no signup)
+     npx cloudflared tunnel --url http://localhost:8000
+     ```
+     Copy the `https://<random-name>.trycloudflare.com` URL it prints, then:
+     ```powershell
+     # Terminal B — tunnel Metro and point the app at the Django tunnel
+     $env:EXPO_PUBLIC_API_BASE_URL = "https://<random-name>.trycloudflare.com/api"
+     npm run start:tunnel
+     ```
+     Scan the new QR code. Tunneling only Django (skipping Metro) is not
+     enough on an isolated network — the app would fail to even load, since
+     Metro would still be unreachable the same way. Both tunnels are needed
+     together.
 
    If tunnel mode is used on a network that turns out not to have isolation,
    set the LAN IP explicitly before starting, since the automatic `hostUri`
@@ -159,8 +181,9 @@ The main routes are `POST /api/scan/`, `POST /api/books/`, and
 ## Architecture
 
 `POST /api/scan/` saves the upload temporarily, runs YOLOv8n on the CPU,
-crops each detected book, sends each crop sequentially to Gemini 3.6 Flash,
-and passes only the returned title/author text to the local RapidFuzz matcher.
+crops each detected book, sends all crops to Gemini 3.6 Flash concurrently
+(bounded to 4 in flight), and passes only the returned title/author text to
+the local RapidFuzz matcher.
 The matcher returns canonical catalog data, confidence, and ambiguity
 candidates. Only `auto_matched` results are persisted to SQLite; review and
 unmatched results remain in the response for a later user decision.
@@ -172,7 +195,7 @@ allowed to guess catalog membership.
 
 ## Catalog
 
-`catalog.csv` contains 102 entries with `title`, `author`, and
+`catalog.csv` contains 119 entries with `title`, `author`, and
 `alternate_titles`. It deliberately includes duplicate titles with different
 authors, separate editions, US/UK alternate titles, omnibus and individual
 volumes, substring titles, and varied author formatting such as initials and
@@ -185,7 +208,7 @@ The local YOLO and RapidFuzz stages cost $0 per request. Gemini 3.6 Flash
 standard paid pricing is $0.75 per 1M input tokens and $3.75 per 1M output
 tokens through December 31, 2026. Using a planning estimate of 560 image input
 tokens plus 50 JSON output tokens per crop gives approximately `$0.00061 per
-crop`, or `$0.00549` for the 9-crop `1.jpg` experiment. Actual cost depends on
+crop`, or `$0.00549` for a 9-crop scan of `easy-case1.jpg`. Actual cost depends on
 the usage tokens returned by Gemini and should be verified in the billing
 dashboard; this implementation currently logs latency but does not yet expose
 provider token usage in the API response.
@@ -195,11 +218,15 @@ provider token usage in the API response.
 - YOLOv8n was chosen as an off-the-shelf CPU model within the time budget. It
   is easy to run locally, but its general COCO training causes missed or
   merged book spines in dense shelves.
-- Sequential VLM calls were chosen first for simpler error isolation and
-  logging. This makes a 9-crop scan take about 42 seconds in the best recorded
-  run; bounded parallelism would reduce wall-clock latency later.
-- An 8-second local VLM cutoff is used while the provider transport deadline
-  remains 10 seconds because the Gemini API rejects deadlines below 10 seconds.
+- VLM calls were sequential at first, for simpler error isolation and
+  logging. Once the pipeline worked, they were switched to bounded
+  concurrency (max 4 in flight) since it only reduces wall-clock time and
+  does not change per-crop success/failure behavior — a 7-crop scan dropped
+  from 100+ seconds to 19.5 seconds on the same test photo.
+- The local VLM cutoff (12s) is kept slightly above the provider transport
+  deadline (10s, the Gemini API's own minimum) rather than below it — an
+  earlier version had this backwards and was discarding responses that were
+  still within the budget already given to the HTTP client.
 - Ambiguous matches are never silently auto-saved. This protects the library
   from choosing the wrong author when identical titles exist.
 
