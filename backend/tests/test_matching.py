@@ -20,3 +20,15 @@ def test_returns_no_match_for_unknown_book():
 
     assert result["matched_book"] is None
     assert result["confidence"] < 0.5
+
+
+def test_same_title_with_unknown_author_is_ambiguous():
+    result = match_book("The Stranger", None)
+
+    assert result["ambiguous"] is True
+    assert result["matched_book"] is None
+    assert len(result["candidates"]) == 2
+    assert {candidate["author"] for candidate in result["candidates"]} == {
+        "Albert Camus",
+        "Harlan Coben",
+    }

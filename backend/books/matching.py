@@ -1,19 +1,4 @@
-"""
-matching.py
-
-Matches VLM-extracted book text (title, author) against catalog.csv
-to find the most likely catalog entry, using fuzzy string matching.
-
-NOTE on the two different thresholds used in this pipeline:
-  - The 70/30 WEIGHTING below is a FORMULA used once, to combine
-    title_score and author_score into a single confidence number.
-
-  - The 85/60 THRESHOLDS (used later, in the /api/scan/ view) are
-    DECISION RULES applied AFTER confidence is already calculated,
-    to decide what the app should DO with that score
-    (auto-save / send to review / treat as no match).
-
-"""
+"""Match VLM-extracted book text against the local catalog."""
 
 import csv
 import re
@@ -23,7 +8,10 @@ from pathlib import Path
 from rapidfuzz import fuzz
 
 CATALOG_PATH = Path(__file__).resolve().parents[2] / "catalog.csv"
-MATCH_THRESHOLD = 0.5
+AUTO_SAVE_THRESHOLD = 0.85
+REVIEW_THRESHOLD = 0.5
+AMBIGUITY_MARGIN = 0.05
+MAX_CANDIDATES = 3
 
 
 def _normalize(value):
@@ -59,10 +47,8 @@ def match_book(title, author, catalog_path=CATALOG_PATH):
             confidence = (title_score * 0.7) + (author_score * 0.3)
             (Title is weighted higher because it's usually longer and
             more distinctive than author names, which collide more often.)
-    Step 4: If confidence is below 0.5, we consider the best candidate
-            too unreliable to even suggest — return matched_book=None.
-            (This is a "floor" check, separate from the 85/60 tiers
-            used downstream to decide auto-save vs. review.)
+    Candidates within AMBIGUITY_MARGIN of the best score are returned for
+    human review instead of selecting one arbitrarily.
 
     Returns:
         {
@@ -70,12 +56,13 @@ def match_book(title, author, catalog_path=CATALOG_PATH):
             "confidence": float (0.0 - 1.0),
             "title_score": float,
             "author_score": float,
+            "ambiguous": bool,
+            "candidates": [...],
         }
     """
     normalized_title = _normalize(title)
     normalized_author = _normalize(author)
-    best_match = None
-    best_scores = (0.0, 0.0, 0.0)
+    scored_entries = []
 
     with Path(catalog_path).open(newline="", encoding="utf-8") as catalog_file:
         for entry in csv.DictReader(catalog_file):
@@ -89,14 +76,49 @@ def match_book(title, author, catalog_path=CATALOG_PATH):
                 _normalize(entry.get("author", "")),
             )
             confidence = (title_score * 0.7 + author_score * 0.3) / 100
-            if confidence > best_scores[0]:
-                best_match = entry
-                best_scores = (confidence, title_score, author_score)
+            scored_entries.append(
+                {
+                    "entry": entry,
+                    "confidence": confidence,
+                    "title_score": title_score / 100,
+                    "author_score": author_score / 100,
+                }
+            )
 
-    confidence, title_score, author_score = best_scores
+    scored_entries.sort(key=lambda item: item["confidence"], reverse=True)
+    best = scored_entries[0] if scored_entries else None
+    confidence = best["confidence"] if best else 0.0
+    candidates = [
+        item
+        for item in scored_entries
+        if confidence - item["confidence"] <= AMBIGUITY_MARGIN
+    ][:MAX_CANDIDATES]
+    distinct_authors = []
+    for item in candidates:
+        author = _normalize(item["entry"].get("author", ""))
+        if not any(
+            fuzz.token_set_ratio(author, known_author) >= 95
+            for known_author in distinct_authors
+        ):
+            distinct_authors.append(author)
+    ambiguous = len(candidates) > 1 and len(distinct_authors) > 1
+    matched_book = None
+    if best and confidence >= REVIEW_THRESHOLD and not ambiguous:
+        matched_book = best["entry"]
+
     return {
-        "matched_book": best_match if confidence >= MATCH_THRESHOLD else None,
+        "matched_book": matched_book,
         "confidence": round(confidence, 4),
-        "title_score": round(title_score / 100, 4),
-        "author_score": round(author_score / 100, 4),
+        "title_score": round(best["title_score"], 4) if best else 0.0,
+        "author_score": round(best["author_score"], 4) if best else 0.0,
+        "ambiguous": ambiguous,
+        "candidates": [
+            {
+                **item["entry"],
+                "confidence": round(item["confidence"], 4),
+                "title_score": round(item["title_score"], 4),
+                "author_score": round(item["author_score"], 4),
+            }
+            for item in candidates
+        ],
     }

@@ -46,4 +46,5 @@ backend/**/__pycache__/
 backend/.pytest_cache/
 backend/*.pt
 backend/test_photos/crops/
+backend/.env
 CLAUDE.md
