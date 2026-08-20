@@ -72,8 +72,12 @@ cd backend
 py -m venv ..\.venv
 ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ..\.venv\Scripts\python.exe manage.py migrate
-..\.venv\Scripts\python.exe manage.py runserver
+..\.venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
 ```
+
+`0.0.0.0:8000` is required, not optional — Django's default `runserver` binds
+to `127.0.0.1` only, which a phone on the same Wi-Fi cannot reach even if
+every firewall rule is correct.
 
 Set `backend/.env` before using the hosted VLM:
 
@@ -89,8 +93,51 @@ npm install
 npm start
 ```
 
-The backend API is available at `http://127.0.0.1:8000`. The main routes are
-`POST /api/scan/`, `POST /api/books/`, and `GET /api/books/`.
+Scan the printed QR code with Expo Go on a phone connected to the **same
+Wi-Fi network** as your computer. The app detects your computer's LAN IP
+automatically (via Expo's `hostUri`), so no manual configuration is needed
+for this path.
+
+### If Expo Go can't connect ("request timed out")
+
+This is almost always local network/firewall, not the app. In order of
+likelihood:
+
+1. **Backend not bound to `0.0.0.0`** — see above.
+2. **Firewall blocking Node's inbound connections.** On Windows, an inbound
+   allow rule for Node.js often exists for a *previous* Node install/version
+   and silently doesn't match the one actually running (common after
+   switching Node version managers). Check with:
+   ```powershell
+   Get-Command node   # confirm the active node.exe path
+   Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { $_.DisplayName -match 'node' } | Get-NetFirewallApplicationFilter
+   ```
+   If the active path isn't listed, add a rule for it (as Administrator):
+   ```powershell
+   New-NetFirewallRule -DisplayName "Node.js (dev)" -Direction Inbound -Program "<path from Get-Command node>" -Action Allow -Profile Any
+   ```
+3. **Router/office Wi-Fi client isolation** (phones can't reach laptops even
+   on the same SSID — common on corporate networks). Fall back to tunnel
+   mode, which only requires outbound connectivity:
+   ```powershell
+   npm run start:tunnel
+   ```
+   Tunnel mode only proxies the JS bundle, not Django — the backend is still
+   reached over the LAN, so the phone and computer still need to share a
+   network. If tunnel is used, set the LAN IP explicitly before starting,
+   since the automatic `hostUri` detection returns a public tunnel hostname
+   instead of the LAN IP in this mode:
+   ```powershell
+   $env:EXPO_PUBLIC_API_BASE_URL = "http://<your-computer-LAN-IP>:8000/api"
+   npm run start:tunnel
+   ```
+   Find `<your-computer-LAN-IP>` with `ipconfig` (Windows) or `ifconfig`/`ip a`
+   (macOS/Linux). If the network has real client isolation, connecting both
+   devices to a phone hotspot instead of the office Wi-Fi is the reliable fix.
+
+The backend API is available at `http://127.0.0.1:8000` on the host machine.
+The main routes are `POST /api/scan/`, `POST /api/books/`, and
+`GET /api/books/`.
 
 ## Architecture
 
@@ -141,13 +188,13 @@ provider token usage in the API response.
 
 ## Unfinished
 
-- The Expo app is still the SDK 54 starter screen; camera/gallery upload,
-  result rendering, review controls, and the library list are not connected to
-  the API yet.
-- Review confirmation, correction, and discard are represented by the API
-  contract and `POST /api/books/`, but there is no dedicated review queue UI.
 - The detector is not book-spine-specific, so recall on tightly packed shelves
   is limited. A labeled spine detector or stronger post-processing would be
   the next CV improvement.
 - The API does not yet expose Gemini usage tokens or a persisted scan/review
   record. Temporary crops are deleted after each request by design.
+- The review queue holds state only in memory on the Expo app; a scan result
+  is lost if the app is closed before the user confirms or discards every
+  item. Persisting an in-progress scan to the backend would be the next step.
+- Uploads are sequential (one photo scanned at a time); there is no queue for
+  scanning multiple photos in one session.
