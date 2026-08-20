@@ -116,24 +116,41 @@ likelihood:
    ```powershell
    New-NetFirewallRule -DisplayName "Node.js (dev)" -Direction Inbound -Program "<path from Get-Command node>" -Action Allow -Profile Any
    ```
-3. **Router/office Wi-Fi client isolation** (phones can't reach laptops even
-   on the same SSID — common on corporate networks). Fall back to tunnel
-   mode, which only requires outbound connectivity:
-   ```powershell
-   npm run start:tunnel
-   ```
-   Tunnel mode only proxies the JS bundle, not Django — the backend is still
-   reached over the LAN, so the phone and computer still need to share a
-   network. If tunnel is used, set the LAN IP explicitly before starting,
-   since the automatic `hostUri` detection returns a public tunnel hostname
-   instead of the LAN IP in this mode:
+3. **Router/office Wi-Fi client (AP) isolation** — phones can't reach laptops
+   even on the same SSID. This is the one that actually bit us during
+   development on a home network. The tell: a phone browser hangs on a
+   loading spinner (not an instant error) when opening
+   `http://<computer-LAN-IP>:8000/api/books/` directly, while the same URL
+   works fine from a browser on the computer itself.
+
+   Tunnel mode alone does **not** fix this — `npm run start:tunnel` only
+   proxies the JS bundle, so the app will load, but every API call will still
+   fail with "Could not reach the server," because Django is still only
+   reachable over the LAN. Confirmed fixes, in order of convenience:
+   - **Wire the computer to the router with an Ethernet cable**, if
+     available. AP isolation typically only isolates *wireless* clients from
+     each other, so a wired computer is usually unaffected. Free and instant.
+   - **Turn off AP/client isolation in the router's admin page** (often
+     `http://192.168.1.1` or `http://192.168.2.1` — check the router itself).
+     Look for "AP Isolation," "Client Isolation," or "Wireless Isolation" in
+     the Wi-Fi settings. Free and permanent, but needs router admin access.
+   - **Connect both the phone and the computer to the phone's personal
+     hotspot** instead of the router. This sidesteps the router entirely.
+     Only the computer's own outbound traffic (the Gemini calls) uses
+     cellular data — the phone-to-computer traffic (JS bundle, photo
+     upload, book list) stays on the hotspot's local Wi-Fi and costs
+     nothing. Good live-demo fallback if the venue's Wi-Fi is uncooperative.
+
+   If tunnel mode is used on a network that turns out not to have isolation,
+   set the LAN IP explicitly before starting, since the automatic `hostUri`
+   detection returns a public tunnel hostname instead of the LAN IP in this
+   mode:
    ```powershell
    $env:EXPO_PUBLIC_API_BASE_URL = "http://<your-computer-LAN-IP>:8000/api"
    npm run start:tunnel
    ```
    Find `<your-computer-LAN-IP>` with `ipconfig` (Windows) or `ifconfig`/`ip a`
-   (macOS/Linux). If the network has real client isolation, connecting both
-   devices to a phone hotspot instead of the office Wi-Fi is the reliable fix.
+   (macOS/Linux).
 
 The backend API is available at `http://127.0.0.1:8000` on the host machine.
 The main routes are `POST /api/scan/`, `POST /api/books/`, and
