@@ -32,3 +32,19 @@ def test_same_title_with_unknown_author_is_ambiguous():
         "Albert Camus",
         "Harlan Coben",
     }
+
+
+def test_substring_title_does_not_match_longer_title():
+    # "It" should not fuzzy-match into "It Ends with Us"
+    result = match_book("It", "Stephen King")
+
+    assert result["matched_book"]["title"] == "It"
+    assert result["confidence"] > 0.9
+
+
+def test_matches_author_name_in_different_form():
+    # catalog has "Fyodor Dostoyevsky"; VLM read a different transliteration
+    result = match_book("The Brothers Karamazov", "Fyodor Dostoevsky")
+
+    assert result["matched_book"]["title"] == "The Brothers Karamazov"
+    assert result["confidence"] > 0.7
