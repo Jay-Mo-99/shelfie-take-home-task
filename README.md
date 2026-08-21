@@ -30,11 +30,17 @@ With `gemini-3.6-flash` and the previous 30-second timeout, 7 of 9 calls
 returned HTTP 200, 0 returned HTTP 503, and 2 returned HTTP 504. Total latency
 was `96.987 seconds`.
 
-The current implementation keeps `gemini-3.6-flash` and applies an 8-second
-local async cutoff. Google's API rejects provider deadlines below 10 seconds,
-so the transport deadline is set to 10 seconds while the local cutoff returns
-the safe `timeout` result at 8 seconds. In the repeated run, all 9 calls
-returned HTTP 200 with 0 timeouts and total latency of `42.451 seconds`.
+That run used `gemini-3.6-flash` with an 8-second local async cutoff on top
+of Google's 10-second minimum transport deadline; all 9 calls returned HTTP
+200 with 0 timeouts and total latency of `42.451 seconds` — every response in
+that particular run happened to land before the 8-second mark, so a real bug
+in that cutoff didn't surface here. The bug: the local cutoff was shorter
+than the transport deadline already given to the HTTP client, so any response
+landing between 8 and 10 seconds would have been discarded as a timeout even
+though it was still within budget. That is exactly what started happening
+during later testing over a slower connection, which is when the bug was
+actually caught. The local cutoff is now 12 seconds (above, not below, the
+transport deadline) — see the VLM timeout note in Decisions And Tradeoffs.
 
 This is a known limitation of using a general COCO detector for book spines:
 the model is not trained to separate adjacent spines, and some spines are
@@ -109,17 +115,21 @@ likelihood:
 
 1. **Backend not bound to `0.0.0.0`** — see above.
 2. **Firewall blocking Node's inbound connections.** On Windows, an inbound
-   allow rule for Node.js often exists for a *previous* Node install/version
+   allow rule for Node.js often exists for a _previous_ Node install/version
    and silently doesn't match the one actually running (common after
    switching Node version managers). Check with:
-   ```powershell
+
+```powershell
    Get-Command node   # confirm the active node.exe path
    Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { $_.DisplayName -match 'node' } | Get-NetFirewallApplicationFilter
-   ```
-   If the active path isn't listed, add a rule for it (as Administrator):
-   ```powershell
+```
+
+If the active path isn't listed, add a rule for it (as Administrator):
+
+```powershell
    New-NetFirewallRule -DisplayName "Node.js (dev)" -Direction Inbound -Program "<path from Get-Command node>" -Action Allow -Profile Any
-   ```
+```
+
 3. **Router/office Wi-Fi client (AP) isolation** — phones can't reach laptops
    even on the same SSID. This is the one that actually bit us during
    development on a home network. The tell: a phone browser hangs on a
@@ -132,7 +142,7 @@ likelihood:
    fail with "Could not reach the server," because Django is still only
    reachable over the LAN. Confirmed fixes, in order of convenience:
    - **Wire the computer to the router with an Ethernet cable**, if
-     available. AP isolation typically only isolates *wireless* clients from
+     available. AP isolation typically only isolates _wireless_ clients from
      each other, so a wired computer is usually unaffected. Free and instant.
    - **Turn off AP/client isolation in the router's admin page** (often
      `http://192.168.1.1` or `http://192.168.2.1` — check the router itself).
@@ -148,35 +158,55 @@ likelihood:
      above are possible (no cable, no router access, no hotspot). This only
      needs the computer to have outbound internet access; it works
      regardless of any local network restriction. Run two tunnels:
-     ```powershell
+
+```powershell
      # Terminal A — tunnel Django (needs no signup)
      npx cloudflared tunnel --url http://localhost:8000
-     ```
+```
+
      Copy the `https://<random-name>.trycloudflare.com` URL it prints, then:
-     ```powershell
+
+```powershell
      # Terminal B — tunnel Metro and point the app at the Django tunnel
      $env:EXPO_PUBLIC_API_BASE_URL = "https://<random-name>.trycloudflare.com/api"
      npm run start:tunnel
-     ```
+```
+
      Scan the new QR code. Tunneling only Django (skipping Metro) is not
      enough on an isolated network — the app would fail to even load, since
      Metro would still be unreachable the same way. Both tunnels are needed
      together.
 
-   If tunnel mode is used on a network that turns out not to have isolation,
-   set the LAN IP explicitly before starting, since the automatic `hostUri`
-   detection returns a public tunnel hostname instead of the LAN IP in this
-   mode:
-   ```powershell
+If tunnel mode is used on a network that turns out not to have isolation,
+set the LAN IP explicitly before starting, since the automatic `hostUri`
+detection returns a public tunnel hostname instead of the LAN IP in this
+mode:
+
+```powershell
    $env:EXPO_PUBLIC_API_BASE_URL = "http://<your-computer-LAN-IP>:8000/api"
    npm run start:tunnel
-   ```
-   Find `<your-computer-LAN-IP>` with `ipconfig` (Windows) or `ifconfig`/`ip a`
-   (macOS/Linux).
+```
+
+Find `<your-computer-LAN-IP>` with `ipconfig` (Windows) or `ifconfig`/`ip a`
+(macOS/Linux).
 
 The backend API is available at `http://127.0.0.1:8000` on the host machine.
 The main routes are `POST /api/scan/`, `POST /api/books/`, and
 `GET /api/books/`.
+
+### Running the tests
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m pytest
+```
+
+`tests/test_matching.py` is specifically the matching-logic tests: exact
+match, a fuzzy typo, an unknown book, a same-title/different-author ambiguous
+case, a substring title that must not fuzzy-match into a longer title, and an
+author name in a different transliteration than the catalog's. The other
+files (`test_detection.py`, `test_vlm.py`, `test_scan.py`) cover detection,
+VLM reading, and the full `/api/scan/` pipeline.
 
 ## Architecture
 
@@ -193,14 +223,76 @@ run offline. The hosted VLM handles reading spine text because that is the
 multimodal task. The VLM is intentionally not given catalog data and is not
 allowed to guess catalog membership.
 
+**Confidence scoring.** RapidFuzz scores the VLM's title text and author text
+separately against each catalog row and combines them into one confidence
+value (title weighted 0.7, author weighted 0.3 — see `match_book` in
+`matching.py`). A score at or above
+`AUTO_SAVE_THRESHOLD` (0.85) is saved automatically using the _catalog's_
+canonical title/author, not the VLM's raw text. A score at or above
+`REVIEW_THRESHOLD` (0.5) but below the auto-save threshold — or two or more
+catalog rows scoring close enough to each other to be ambiguous — is
+returned for review instead of being guessed. Anything below `0.5`, or a crop
+the VLM could not read at all, is also queued for review rather than
+silently dropped.
+
+**Review queue (human in the loop).** Each item the matcher doesn't
+auto-save is shown to the user with what the VLM detected (title/author, when
+readable) and the closest catalog candidate with its confidence percentage.
+The user picks one of three actions: **Confirm** (accept as shown),
+**Correct** (type the right title/author — the input is seeded with the
+VLM's _detected_ text, not the uncertain catalog guess, since the detected
+text is usually already right), or **Discard** (the item is dropped and never
+written to SQLite). Nothing in this queue is auto-accepted or silently
+removed without one of these three explicit actions.
+
+**Failure handling.** Four failure modes are handled without crashing the
+app or leaving a blank screen: a VLM call that exceeds the 12-second local
+timeout returns to the review queue labeled `(timeout)`; a VLM response that
+doesn't parse as the expected JSON shape is treated as an unreadable spine
+instead of raising; a photo where YOLO detects zero book boxes returns an
+explicit "no books detected" result instead of an empty or broken screen; and
+a spine the VLM genuinely can't read returns null text and is queued for
+review with its own message rather than being guessed.
+
 ## Catalog
 
 `catalog.csv` contains 119 entries with `title`, `author`, and
 `alternate_titles`. It deliberately includes duplicate titles with different
-authors, separate editions, US/UK alternate titles, omnibus and individual
-volumes, substring titles, and varied author formatting such as initials and
-`Last, First` order. The catalog is weighted toward commonly owned books so
-that live presentation photos have a reasonable chance of matching.
+authors (`The Stranger` — Camus vs. Coben), separate editions of the same
+book (`1984` / `Nineteen Eighty-Four (Centennial Edition)`), US/UK alternate
+titles (`The Golden Compass` / `Northern Lights`), omnibus editions alongside
+their individual volumes (`The Lord of the Rings`; `Night World` and its
+three component novels), a title that is a substring of another (`It` /
+`It Ends with Us`), and author names in multiple forms — initials
+(`J.R.R. Tolkien`), `Last, First` order (`Orwell, George`), accents
+(`Gabriel García Márquez` vs. `Gabriel Garcia Marquez`), and transliteration
+(`Fyodor Dostoevsky` vs. `Fyodor Dostoyevsky`). The catalog is weighted toward
+commonly owned books so that live presentation photos have a reasonable
+chance of matching.
+
+The catalog was built before any of the bookshelf test photos were taken, so
+it was never hand-tuned to what those shelves actually contain. Several books
+photographed during testing (`The White Bone`, `Kowloon Tong`,
+`Balancing Act`, `Sotah`, `Truly Madly Guilty`) turned out not to be in it —
+not a deliberate exclusion, just an artifact of keeping the catalog to
+commonly-owned titles rather than every book in print. All five correctly
+surfaced as "no confident catalog match" during testing rather than being
+force-matched to something else, which incidentally exercised the same
+catalog-gap path a curated test case would have.
+
+## Test Photos
+
+The photos used for testing are committed in `backend/test_photos/`, named
+for what each one exercises:
+
+- `easy-case1.jpg`, `easy-case2.jpg` — normal, well-lit shelves where most
+  spines are readable and expected to match the catalog.
+- `hard-case-extreme-angle-no-match.jpg` — shot from a steep upward angle,
+  which distorts spine text enough that most crops time out or fail to read.
+- `hard-case-catalog-gap.jpg` — a dense, 24-book shelf where several titles
+  (see the Catalog section above) are genuinely not in `catalog.csv`, to
+  exercise the review queue's "no confident match" path rather than a VLM
+  read failure.
 
 ## Cost Estimate
 
@@ -229,6 +321,9 @@ provider token usage in the API response.
   still within the budget already given to the HTTP client.
 - Ambiguous matches are never silently auto-saved. This protects the library
   from choosing the wrong author when identical titles exist.
+- The "Correct" form is seeded from the VLM's detected text rather than the
+  catalog's closest-match guess, since the guess is exactly the thing the
+  review step exists to question.
 
 ## Unfinished
 
@@ -242,3 +337,13 @@ provider token usage in the API response.
   item. Persisting an in-progress scan to the backend would be the next step.
 - Uploads are sequential (one photo scanned at a time); there is no queue for
   scanning multiple photos in one session.
+- The same physical book can occasionally be detected as two overlapping
+  boxes that both survive IoU deduplication (their overlap falls just under
+  the `0.50` threshold), each getting cropped and read separately. If both
+  crops independently reach `auto_matched` on the same catalog entry, the
+  library ends up with a duplicate row. There is no dedup check against the
+  existing library on save; the fix would be either tightening detection-side
+  deduplication or checking for an existing matching title/author before
+  auto-saving.
+
+With one more day, the priority order would be: fix the duplicate-detection dedup check first (cheapest, most visible in a live demo), then expose Gemini token usage in the API response, then persist an in-progress scan so review state survives an app close.

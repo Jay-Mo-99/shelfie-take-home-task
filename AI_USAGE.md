@@ -21,6 +21,8 @@ I used two AI assistants during this take-home project: GitHub Copilot Chat (in 
 - Added crop downscaling before the VLM call to cut upload size and Gemini image tokens.
 - Switched VLM calls from sequential to bounded concurrency after measuring that a 7-crop scan took 100+ seconds sequentially; concurrent calls (capped at 4 in flight) brought the same scan to 19.5 seconds, with no change to per-crop success/failure behavior.
 - Diagnosed a real local-network connectivity problem (the phone couldn't reach the dev machine over Wi-Fi) down to router-level AP/client isolation, after ruling out the backend bind address, Windows Firewall, and third-party (McAfee) firewall settings one at a time. Set up and verified a Cloudflare Tunnel fallback for both Metro and Django, and wrote the corresponding README troubleshooting section.
+- Found that the review queue's "Correct" form was pre-filled with the catalog's low-confidence guess instead of what the VLM actually read off the spine — meaning a wrong guess could get silently confirmed instead of questioned. Fixed it to seed from the VLM's detected text.
+- Registered the `Book` model in Django admin so the library could be cleared between test scans without a custom UI endpoint.
 - Reviewed Copilot-generated code and results before accepting them, and helped structure this README and AI_USAGE.md.
 
 ## Human Decisions And Verification
